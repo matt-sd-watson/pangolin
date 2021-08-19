@@ -105,6 +105,10 @@ def main(sysargs = sys.argv[1:]):
     parser.add_argument("--update", action='store_true', default=False, help="Automatically updates to latest release of pangolin, pangoLEARN and constellations, then exits")
     parser.add_argument("--update-data", action='store_true',dest="update_data", default=False, help="Automatically updates to latest release of pangoLEARN and constellations, then exits")
     parser.add_argument("--all-versions", action='store_true',dest="all_versions", default=False, help="Print all tool, dependency, and data versions then exit.")
+    parser.add_argument('--reassignment-comparison', action="store", dest="reassignment",
+                        help="If selected, compare the lineage report to a previous input lineage report using a Sankey network")
+    parser.add_argument('--sankey-threshold', action="store", dest="sankey_threshold",
+                        help="Set the minimum number of reassignment counts to show in the Sankey graphic.", default=2)
 
     if len(sysargs)<1:
         parser.print_help()
@@ -192,9 +196,6 @@ def main(sysargs = sys.argv[1:]):
               f"pango-designation: {pango_designation.__version__}")
         sys.exit(0)
 
-
-
-
     dependency_checks.check_dependencies()
 
     # to enable not having to pass a query if running update
@@ -253,6 +254,11 @@ def main(sysargs = sys.argv[1:]):
     else:
         align_dir = tempdir
         alignment_out = False
+
+    if args.reassignment:
+        reassignment = os.path.join(cwd, args.reassignment)
+    else:
+        reassignment = ""
 
     """
     QC steps:
@@ -339,9 +345,10 @@ def main(sysargs = sys.argv[1:]):
             "pangoLEARN_version":pangoLEARN.__version__,
             "pangolin_version":__version__,
             "pango_version":pango_designation.__version__,
-            "threads":args.threads
+            "threads":args.threads,
+            "reassignment": reassignment,
+            "sankey_threshold": args.sankey_threshold
             }
-
         data_install_checks.check_install(config)
         snakefile = data_install_checks.get_snakefile(thisdir)
 

@@ -6,6 +6,9 @@ import os
 from pangolin.utils.log_colours import green,cyan,red
 from pangolin.utils.hash_functions import get_hash_string
 import pangolin.pangolearn.pangolearn as pangolearn
+import pandas as pd
+import plotly.graph_objects as go
+import plotly
 
 ##### Configuration #####
 
@@ -47,8 +50,10 @@ ruleorder: usher_to_report > generate_report
 rule all:
     input:
         config["outfile"],
-        os.path.join(config["tempdir"],"VOC_report.scorpio.csv")
-                    
+        os.path.join(config["tempdir"],"VOC_report.scorpio.csv"),
+        lambda wildcards: os.path.join(config["outdir"], "reassignments.html") if config["reassignment"] else [],
+        lambda wildcards: os.path.join(config["outdir"], "reassignment_tallies.csv") if config["reassignment"] else []
+
 rule align_to_reference:
     input:
         fasta = config["query_fasta"],
@@ -438,3 +443,74 @@ rule usher_to_report:
         print(green(f"Output file written to: ") + f"{output.csv}")
         if config["alignment_out"]:
             print(green(f"Output alignment written to: ") + config["outdir"] +"/sequences.aln.fasta")
+
+
+if not config.get("reassignment"):
+    config["reassignment"]=""
+
+
+rule sankey_reassignment: 
+    input: 
+        old_lineage = config["reassignment"],
+        new_lineage = rules.generate_report.output.csv
+    params: 
+        threshold = config["sankey_threshold"]
+    output: 
+        sankey_html = os.path.join(config["outdir"], "reassignments.html"),
+        tallies = os.path.join(config["outdir"], "reassignment_tallies.csv")
+
+    run: 
+        original_lineage = pd.read_csv(input.old_lineage)
+        new_lineage = pd.read_csv(input.new_lineage)
+        merged = original_lineage[["taxon", "lineage"]].rename(columns={"lineage": "old_lineage"}).merge(
+        new_lineage[["taxon", "lineage"]].rename(columns={"lineage": "new_lineage"}), how="inner", on="taxon")
+        
+        combo_tallies = merged.loc[(merged['new_lineage'] != merged['old_lineage'])].groupby(
+        ['new_lineage', 'old_lineage']).size().reset_index().rename(columns={0: 'Value'})
+
+
+        higher_than_threshold = combo_tallies.loc[combo_tallies['Value'] > int(params.threshold)]
+
+        if not higher_than_threshold.empty:
+            all_nodes = higher_than_threshold.old_lineage.values.tolist() + higher_than_threshold.new_lineage.values.tolist()
+            source_indices = [all_nodes.index(old_lineage) for old_lineage in higher_than_threshold.old_lineage]
+            target_indices = [all_nodes.index(new_lineage) for new_lineage in higher_than_threshold.new_lineage]
+            fig = go.Figure(data=[go.Sankey(node=dict(label=all_nodes, pad=20, thickness=20,
+            line=dict(color="black", width=1.0)),
+            link=dict(source=source_indices, target=target_indices, value=higher_than_threshold.Value.values.tolist()))],
+            layout_yaxis_range=[0.1,1])
+
+            version_labels = ""
+            for i in ['pangolin_version', 'pangoLEARN_version', 'pango_version']:
+                tool_version = i + ": " + str(original_lineage[i].unique()[0]) + " to " + str(new_lineage[i].unique()[0])
+                version_labels = version_labels + "<br>{}".format(tool_version)
+            
+            fig.update_layout(title_text="Pangolin reassignments <br><sup>Previous Lineage ---> Updated Lineage</sup>",
+                      font_size=20, yaxis_range=[0.1,1])
+
+            fig.add_annotation(x=0.004,y=-0.09,text=version_labels,
+            showarrow=False,
+            font=dict(
+            size=15,
+            color="black"),align='left')
+
+            plotly.offline.plot(fig, filename=output.sankey_html, auto_open=False)
+            
+        else:
+            print("No lineage reassignment pairs with at least {} counts could be detected with the input files".format(params.threshold))
+            text = '''
+                <html>
+                <body>
+                <h1>No lineage reassignment pairs with at least {} counts could be detected</h1>
+                </body>
+                </html>
+                '''.format(params.threshold)
+            
+            file = open(output.sankey_html,"w")
+            file.write(text)
+            file.close()
+
+        combo_tallies.sort_values(by=['Value'], ascending=False).to_csv(output.tallies, index=False)
+
+      
+        
